@@ -55,40 +55,56 @@ def load_data():
         st.error(f"Erro ao carregar dados da nuvem: {e}")
         return None
 
-def verificar_atraso(row, limite):
-    """Lógica para determinar se o cliente está com backup em atraso."""
+def definir_status_alerta(row, hoje, ontem):
+    """
+    Define o nível de alerta:
+    0: OK (Verde) - Backup feito hoje
+    1: PENDENTE (Amarelo) - Backup feito ontem, mas falta hoje
+    2: CRÍTICO (Vermelho) - Backup mais antigo que ontem ou Erro
+    """
     try:
-        dt_backup = pd.to_datetime(row['Data_Backup_Info'], dayfirst=True, errors='coerce')
-        if pd.isna(dt_backup) or dt_backup < limite:
-            return True
-        return False
+        dt_backup = pd.to_datetime(row['Data_Backup_Info'], dayfirst=True, errors='coerce').date()
+        status_raw = str(row['Status']).upper()
+        
+        if status_raw == "ERRO":
+            return 2
+        
+        if pd.isna(dt_backup):
+            return 2
+            
+        if dt_backup == hoje:
+            return 0
+        elif dt_backup == ontem:
+            return 1
+        else:
+            return 2
     except:
-        return True
+        return 2
 
 df_clientes = load_data()
 
 if df_clientes is not None:
-    # Lógica de Tempo (24 horas)
-    agora = datetime.now()
-    limite = agora - timedelta(hours=24)
+    # Datas de referência
+    hoje = datetime.now().date()
+    ontem = hoje - timedelta(days=1)
     
-    # Processamento de Status
-    df_clientes['Atrasado'] = df_clientes.apply(lambda r: verificar_atraso(r, limite), axis=1)
-    df_clientes['Status_Erro'] = df_clientes['Status'].astype(str).str.upper() == "ERRO"
-    df_clientes['Critico'] = df_clientes['Atrasado'] | df_clientes['Status_Erro']
+    # Processamento de Status de Alerta
+    df_clientes['Alerta_Nivel'] = df_clientes.apply(lambda r: definir_status_alerta(r, hoje, ontem), axis=1)
 
-    # Clientes críticos para a barra lateral
-    clientes_criticos_nomes = df_clientes[df_clientes['Critico']]['Nome_Cliente'].unique().tolist()
+    # Listas para a barra lateral
+    clientes_criticos = df_clientes[df_clientes['Alerta_Nivel'] == 2]['Nome_Cliente'].unique().tolist()
+    clientes_pendentes = df_clientes[df_clientes['Alerta_Nivel'] == 1]['Nome_Cliente'].unique().tolist()
 
     # Métricas de Topo
     total = len(df_clientes)
-    criticos_count = df_clientes['Critico'].sum()
-    em_dia = total - criticos_count
+    em_dia_count = (df_clientes['Alerta_Nivel'] == 0).sum()
+    pendentes_hoje_count = (df_clientes['Alerta_Nivel'] == 1).sum()
+    criticos_count = (df_clientes['Alerta_Nivel'] == 2).sum()
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Clientes Monitorizados", total)
-    c2.metric("Backups em Dia", em_dia)
-    c3.metric("Clientes em Alerta", int(criticos_count), delta=f"{int(criticos_count)} críticos", delta_color="inverse")
+    c2.metric("Concluídos Hoje", em_dia_count)
+    c3.metric("Pendentes Hoje", pendentes_hoje_count, delta=f"{pendentes_hoje_count} hoje", delta_color="off")
 
     st.divider()
 
@@ -100,21 +116,23 @@ if df_clientes is not None:
             df_clientes['Hardware_Hash'].str.contains(busca, case=False, na=False)
         ]
 
-    st.subheader("📋 Estado Atual dos Clientes")
+    st.subheader("📋 Estado Detalhado")
     
     # Colunas para exibição
     cols_to_display = ['Nome_Cliente', 'Status', 'Arquivo', 'Data_Backup_Info', 'Data_Envio', 'Hardware_Hash']
     
     def style_dataframe(row):
-        if row['Critico']:
-            return ['background-color: #ffcccc'] * len(row)
+        if row['Alerta_Nivel'] == 2:
+            return ['background-color: #ffcccc'] * len(row) # Vermelho claro
+        elif row['Alerta_Nivel'] == 1:
+            return ['background-color: #fff9c4'] * len(row) # Amarelo claro
         return [''] * len(row)
 
     st.dataframe(
-        df_clientes[cols_to_display + ['Critico']].style.apply(style_dataframe, axis=1),
+        df_clientes[cols_to_display + ['Alerta_Nivel']].style.apply(style_dataframe, axis=1),
         width="stretch",
         column_config={
-            "Critico": None,
+            "Alerta_Nivel": None,
             "Hardware_Hash": st.column_config.TextColumn("ID Hardware", width="small"),
             "Data_Backup_Info": "Data do Ficheiro",
             "Data_Envio": "Último Reporte"
@@ -123,9 +141,19 @@ if df_clientes is not None:
     )
     
     # --- BARRA LATERAL DINÂMICA ---
-    st.sidebar.header("🚨 Clientes Críticos")
-    if clientes_criticos_nomes:
-        for nome in clientes_criticos_nomes:
+    st.sidebar.header("📊 Resumo do Dia")
+    
+    # Contador de pendentes
+    st.sidebar.subheader(f"⏳ Pendentes Hoje: {pendentes_hoje_count}")
+    if clientes_pendentes:
+        for nome in clientes_pendentes:
+            st.sidebar.warning(f"⚠️ {nome}")
+    
+    st.sidebar.divider()
+    
+    st.sidebar.subheader(f"🚨 Críticos: {criticos_count}")
+    if clientes_criticos:
+        for nome in clientes_criticos:
             st.sidebar.error(f"❌ {nome}")
     else:
         st.sidebar.success("✅ Nenhum cliente crítico")
