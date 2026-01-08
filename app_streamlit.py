@@ -5,7 +5,23 @@ from datetime import datetime, timedelta
 # Configurações Visuais e Título do Projeto
 st.set_page_config(page_title="BACKUP DOS CLIENTES", page_icon="📊", layout="wide")
 
+# Estilo customizado para melhorar a visualização
+st.markdown("""
+    <style>
+    .main {
+        background-color: #f5f7f9;
+    }
+    .stMetric {
+        background-color: #ffffff;
+        padding: 15px;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    </style>
+    """, unsafe_allow_index=True)
+
 st.title("📊 BACKUP DOS CLIENTES - Dashboard")
+st.markdown("Monitorização centralizada dos logs de backup.")
 
 # --- CONEXÃO COM A PLANILHA DO GOOGLE ---
 CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQMAr0iEgRF6pg_wnN9tGFMA9-hKohffXWMhr5IvNjXkxHrs1_u5j22JNuKOII0sQRdGQKT7Fjn-qZS/pub?output=csv"
@@ -17,21 +33,21 @@ def load_data():
         df = pd.read_csv(CSV_URL)
         if df.empty: return None
 
-        # Mapeamento por posição das colunas para evitar erros de nomes
-        # 0: Data Envio, 1: Hash, 2: Status, 3: Arquivo, 4: Data Backup, 5: Nome Cliente
+        # Mapeamento dinâmico das colunas (Ordem: Timestamp, Hash, Status, Arquivo, Data Backup, Nome Cliente)
+        # Se a planilha tiver mais colunas, o mapeamento ignora o resto
         new_cols = ['Data_Envio', 'Hardware_Hash', 'Status', 'Arquivo', 'Data_Backup_Info', 'Nome_Cliente']
         current_cols = list(df.columns)
         
         mapping = {current_cols[i]: new_cols[i] for i in range(len(new_cols)) if i < len(current_cols)}
         df = df.rename(columns=mapping)
         
-        # Tratamento de Datas (Data_Envio é quando o formulário recebeu o dado)
+        # Tratamento de Datas de Envio
         df['Data_Envio'] = pd.to_datetime(df['Data_Envio'], errors='coerce')
         
-        # REGISTRO ÚNICO POR CLIENTE (O mais recente baseado no envio)
-        df_latest = df.sort_values('Data_Envio', ascending=False).drop_duplicates('Hardware_Hash', keep='first')
+        # REGISTRO ÚNICO: Pega apenas o último envio de cada cliente
+        df_latest = df.sort_values('Data_Envio', ascending=False).drop_duplicates('Hardware_Hash', keep='first').copy()
         
-        # Se a coluna Nome_Cliente ainda não existir na planilha, usa o Hash
+        # Se a coluna Nome_Cliente não existir na planilha ainda, usa o Hash
         if 'Nome_Cliente' not in df_latest.columns:
             df_latest['Nome_Cliente'] = df_latest['Hardware_Hash']
             
@@ -40,65 +56,82 @@ def load_data():
         st.error(f"Erro ao carregar dados da nuvem: {e}")
         return None
 
+def verificar_atraso(row, limite):
+    """Lógica para determinar se o cliente está com backup em atraso."""
+    try:
+        # Tenta converter a data que o cliente enviou
+        dt_backup = pd.to_datetime(row['Data_Backup_Info'], dayfirst=True, errors='coerce')
+        # Se a data for inválida ou menor que o limite (24h), está atrasado
+        if pd.isna(dt_backup) or dt_backup < limite:
+            return True
+        return False
+    except:
+        return True
+
 df_clientes = load_data()
 
 if df_clientes is not None:
-    # Lógica de Status: Alerta se o backup tem mais de 24 horas
+    # Lógica de Tempo (24 horas)
     agora = datetime.now()
     limite = agora - timedelta(hours=24)
     
-    # Calculamos o status de atraso antes de filtrar as colunas para evitar o AttributeError
-    def verificar_atraso(row):
-        try:
-            # Tenta converter a string da data do backup que veio do cliente
-            dt_backup = pd.to_datetime(row['Data_Backup_Info'], format='%d/%m/%Y %H:%M:%S', errors='coerce')
-            if pd.isna(dt_backup) or dt_backup < limite:
-                return True
-            return False
-        except:
-            return True
+    # Processamento de Status
+    df_clientes['Atrasado'] = df_clientes.apply(lambda r: verificar_atraso(r, limite), axis=1)
+    df_clientes['Status_Erro'] = df_clientes['Status'].astype(str).str.upper() == "ERRO"
+    df_clientes['Critico'] = df_clientes['Atrasado'] | df_clientes['Status_Erro']
 
-    # Criamos uma coluna temporária invisível para o estilo
-    df_clientes['Atrasado'] = df_clientes.apply(verificar_atraso, axis=1)
-
+    # Métricas de Topo
     total = len(df_clientes)
-    # Conta quantos não estão atrasados
-    em_dia = len(df_clientes[df_clientes['Atrasado'] == False])
-    atrasados = total - em_dia
+    criticos = df_clientes['Critico'].sum()
+    em_dia = total - criticos
 
-    # Layout de Métricas
     c1, c2, c3 = st.columns(3)
-    c1.metric("Clientes Monitorados", total)
+    c1.metric("Clientes Monitorizados", total)
     c2.metric("Backups em Dia", em_dia)
-    c3.metric("Clientes em Alerta", atrasados, delta_color="inverse")
+    c3.metric("Clientes em Alerta", int(criticos), delta=f"{int(criticos)} críticos", delta_color="inverse")
 
     st.divider()
 
-    # Tabela formatada
-    st.subheader("📋 Status dos Clientes")
+    # Filtro de Busca
+    busca = st.text_input("🔍 Procurar por Nome ou Hash", "")
+    if busca:
+        df_clientes = df_clientes[
+            df_clientes['Nome_Cliente'].str.contains(busca, case=False, na=False) | 
+            df_clientes['Hardware_Hash'].str.contains(busca, case=False, na=False)
+        ]
+
+    st.subheader("📋 Estado Atual dos Clientes")
     
-    # Colunas que queremos exibir na ordem correta
-    cols_view = ['Nome_Cliente', 'Status', 'Arquivo', 'Data_Backup_Info', 'Data_Envio', 'Hardware_Hash', 'Atrasado']
-    cols_to_show = [c for c in cols_view if c in df_clientes.columns]
+    # Definimos as colunas que queremos mostrar
+    cols_to_display = ['Nome_Cliente', 'Status', 'Arquivo', 'Data_Backup_Info', 'Data_Envio', 'Hardware_Hash']
     
-    def highlight_rows(row):
-        # Agora usamos a coluna 'Atrasado' que garantimos estar no DataFrame
-        is_error = str(row['Status']).upper() == "ERRO"
-        if row['Atrasado'] or is_error:
+    # Função para colorir a linha inteira
+    def style_dataframe(row):
+        # Se for crítico, aplica fundo vermelho claro
+        if row['Critico']:
             return ['background-color: #ffcccc'] * len(row)
         return [''] * len(row)
 
-    # Exibimos o DataFrame, mas escondemos a coluna técnica 'Atrasado'
+    # Exibição Final
+    # Passamos as colunas extras ('Critico') para o style mas escondemos no st.dataframe
     st.dataframe(
-        df_clientes[cols_to_show].style.apply(highlight_rows, axis=1),
+        df_clientes[cols_to_display + ['Critico']].style.apply(style_dataframe, axis=1),
         use_container_width=True,
         column_config={
-            "Atrasado": None # Isso esconde a coluna da visão do usuário
-        }
+            "Critico": None, # Esconde a coluna técnica
+            "Hardware_Hash": st.column_config.TextColumn("ID Hardware", width="small"),
+            "Data_Backup_Info": "Data do Ficheiro",
+            "Data_Envio": "Último Reporte"
+        },
+        hide_index=True
     )
     
+    # Botão de refresh manual
     if st.button("🔄 Atualizar Painel"):
         st.cache_data.clear()
         st.rerun()
 else:
-    st.info("Aguardando o recebimento de dados ou verificação do link da planilha.")
+    st.info("A aguardar o recebimento de dados. Certifica-te de que os clientes estão a correr o serviço.")
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("**Dica:** Alimenta a coluna 'Nome_Cliente' diretamente na tua Planilha Google para identificar as máquinas aqui.")
