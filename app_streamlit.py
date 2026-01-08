@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import os
 from datetime import datetime, timedelta
 
 # Configurações Visuais e Título do Projeto
@@ -9,24 +8,9 @@ st.set_page_config(page_title="BACKUP DOS CLIENTES", page_icon="📊", layout="w
 st.title("📊 BACKUP DOS CLIENTES - Dashboard")
 
 # --- CONEXÃO COM A PLANILHA DO GOOGLE ---
+# Certifique-se de que a planilha tem as colunas na ordem: 
+# [Carimbo, Hash, Status, Arquivo, Data Backup, Nome do Cliente]
 CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQMAr0iEgRF6pg_wnN9tGFMA9-hKohffXWMhr5IvNjXkxHrs1_u5j22JNuKOII0sQRdGQKT7Fjn-qZS/pub?output=csv"
-
-# --- CARREGAR DICIONÁRIO DO EXCEL ---
-def load_client_dictionary():
-    """Lê o arquivo clientes.xlsx para mapear os nomes."""
-    excel_path = "clientes.xlsx"
-    if os.path.exists(excel_path):
-        try:
-            # Espera-se um Excel com colunas: "Hash" e "Nome"
-            df_dict = pd.read_excel(excel_path)
-            # Converte para dicionário para busca rápida
-            return dict(zip(df_dict['Hash'], df_dict['Nome']))
-        except Exception as e:
-            st.sidebar.error(f"Erro ao ler clientes.xlsx: {e}")
-            return {}
-    else:
-        st.sidebar.warning("Arquivo 'clientes.xlsx' não encontrado na pasta do app.")
-        return {}
 
 @st.cache_data(ttl=300)
 def load_data():
@@ -35,9 +19,12 @@ def load_data():
         df = pd.read_csv(CSV_URL)
         if df.empty: return None
 
-        # Mapeamento por posição das colunas do Google Forms
-        new_cols = ['Data_Envio', 'Hardware_Hash', 'Status', 'Arquivo', 'Data_Backup_Info']
+        # Mapeamento por posição das colunas
+        # Adicionamos a coluna 'Nome_Cliente' que você alimentará manualmente na planilha
+        new_cols = ['Data_Envio', 'Hardware_Hash', 'Status', 'Arquivo', 'Data_Backup_Info', 'Nome_Cliente']
         current_cols = list(df.columns)
+        
+        # Faz o mapeamento dinâmico conforme a quantidade de colunas disponíveis
         mapping = {current_cols[i]: new_cols[i] for i in range(len(new_cols)) if i < len(current_cols)}
         df = df.rename(columns=mapping)
         
@@ -45,15 +32,13 @@ def load_data():
         df['Data_Envio'] = pd.to_datetime(df['Data_Envio'], errors='coerce')
         df['Data_Backup_DT'] = pd.to_datetime(df['Data_Backup_Info'], format='%d/%m/%Y %H:%M:%S', errors='coerce')
         
-        # REGISTRO ÚNICO POR CLIENTE (O mais recente)
+        # REGISTRO ÚNICO POR CLIENTE (O mais recente baseado no envio)
         df_latest = df.sort_values('Data_Envio', ascending=False).drop_duplicates('Hardware_Hash', keep='first')
         
-        # Carregar Dicionário Externo (Excel)
-        dict_clientes = load_client_dictionary()
-        
-        # Aplicar o Mapeamento
-        df_latest['Nome_Cliente'] = df_latest['Hardware_Hash'].map(dict_clientes).fillna("DESCONHECIDO (Novo Cliente)")
-        
+        # Se a coluna Nome_Cliente não existir (planilha ainda não alterada), preenche com o Hash
+        if 'Nome_Cliente' not in df_latest.columns:
+            df_latest['Nome_Cliente'] = df_latest['Hardware_Hash']
+            
         return df_latest
     except Exception as e:
         st.error(f"Erro ao carregar dados da nuvem: {e}")
@@ -81,8 +66,11 @@ if df_clientes is not None:
     # Tabela formatada
     st.subheader("📋 Status dos Clientes")
     
-    # Reorganizar colunas para exibição
+    # Colunas para exibição (Nome do Cliente agora vem da planilha)
     cols_view = ['Nome_Cliente', 'Status', 'Arquivo', 'Data_Backup_Info', 'Data_Envio', 'Hardware_Hash']
+    
+    # Garante que todas as colunas de visualização existem
+    cols_to_show = [c for c in cols_view if c in df_clientes.columns]
     
     def highlight_rows(row):
         is_late = pd.isna(row.Data_Backup_DT) or row.Data_Backup_DT < limite
@@ -92,20 +80,12 @@ if df_clientes is not None:
         return [''] * len(row)
 
     st.dataframe(
-        df_clientes[cols_view].style.apply(highlight_rows, axis=1),
+        df_clientes[cols_to_show].style.apply(highlight_rows, axis=1),
         use_container_width=True
     )
-    
-    # Barra lateral com instruções
-    st.sidebar.info("""
-    ### 📂 Dicionário Excel
-    Crie um arquivo chamado **clientes.xlsx** na mesma pasta deste script com:
-    - Coluna A: **Hash** (Código do hardware)
-    - Coluna B: **Nome** (Nome do cliente)
-    """)
     
     if st.button("🔄 Atualizar Painel"):
         st.cache_data.clear()
         st.rerun()
 else:
-    st.info("Nenhum dado recebido ainda ou erro de conexão.")
+    st.info("Aguardando o recebimento de dados ou verificação do link da planilha.")
