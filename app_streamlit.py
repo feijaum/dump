@@ -8,8 +8,6 @@ st.set_page_config(page_title="BACKUP DOS CLIENTES", page_icon="📊", layout="w
 st.title("📊 BACKUP DOS CLIENTES - Dashboard")
 
 # --- CONEXÃO COM A PLANILHA DO GOOGLE ---
-# Certifique-se de que a planilha tem as colunas na ordem: 
-# [Carimbo, Hash, Status, Arquivo, Data Backup, Nome do Cliente]
 CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQMAr0iEgRF6pg_wnN9tGFMA9-hKohffXWMhr5IvNjXkxHrs1_u5j22JNuKOII0sQRdGQKT7Fjn-qZS/pub?output=csv"
 
 @st.cache_data(ttl=300)
@@ -19,23 +17,21 @@ def load_data():
         df = pd.read_csv(CSV_URL)
         if df.empty: return None
 
-        # Mapeamento por posição das colunas
-        # Adicionamos a coluna 'Nome_Cliente' que você alimentará manualmente na planilha
+        # Mapeamento por posição das colunas para evitar erros de nomes
+        # 0: Data Envio, 1: Hash, 2: Status, 3: Arquivo, 4: Data Backup, 5: Nome Cliente
         new_cols = ['Data_Envio', 'Hardware_Hash', 'Status', 'Arquivo', 'Data_Backup_Info', 'Nome_Cliente']
         current_cols = list(df.columns)
         
-        # Faz o mapeamento dinâmico conforme a quantidade de colunas disponíveis
         mapping = {current_cols[i]: new_cols[i] for i in range(len(new_cols)) if i < len(current_cols)}
         df = df.rename(columns=mapping)
         
-        # Tratamento de Datas
+        # Tratamento de Datas (Data_Envio é quando o formulário recebeu o dado)
         df['Data_Envio'] = pd.to_datetime(df['Data_Envio'], errors='coerce')
-        df['Data_Backup_DT'] = pd.to_datetime(df['Data_Backup_Info'], format='%d/%m/%Y %H:%M:%S', errors='coerce')
         
         # REGISTRO ÚNICO POR CLIENTE (O mais recente baseado no envio)
         df_latest = df.sort_values('Data_Envio', ascending=False).drop_duplicates('Hardware_Hash', keep='first')
         
-        # Se a coluna Nome_Cliente não existir (planilha ainda não alterada), preenche com o Hash
+        # Se a coluna Nome_Cliente ainda não existir na planilha, usa o Hash
         if 'Nome_Cliente' not in df_latest.columns:
             df_latest['Nome_Cliente'] = df_latest['Hardware_Hash']
             
@@ -51,8 +47,23 @@ if df_clientes is not None:
     agora = datetime.now()
     limite = agora - timedelta(hours=24)
     
+    # Calculamos o status de atraso antes de filtrar as colunas para evitar o AttributeError
+    def verificar_atraso(row):
+        try:
+            # Tenta converter a string da data do backup que veio do cliente
+            dt_backup = pd.to_datetime(row['Data_Backup_Info'], format='%d/%m/%Y %H:%M:%S', errors='coerce')
+            if pd.isna(dt_backup) or dt_backup < limite:
+                return True
+            return False
+        except:
+            return True
+
+    # Criamos uma coluna temporária invisível para o estilo
+    df_clientes['Atrasado'] = df_clientes.apply(verificar_atraso, axis=1)
+
     total = len(df_clientes)
-    em_dia = len(df_clientes[df_clientes['Data_Backup_DT'] > limite])
+    # Conta quantos não estão atrasados
+    em_dia = len(df_clientes[df_clientes['Atrasado'] == False])
     atrasados = total - em_dia
 
     # Layout de Métricas
@@ -66,22 +77,24 @@ if df_clientes is not None:
     # Tabela formatada
     st.subheader("📋 Status dos Clientes")
     
-    # Colunas para exibição (Nome do Cliente agora vem da planilha)
-    cols_view = ['Nome_Cliente', 'Status', 'Arquivo', 'Data_Backup_Info', 'Data_Envio', 'Hardware_Hash']
-    
-    # Garante que todas as colunas de visualização existem
+    # Colunas que queremos exibir na ordem correta
+    cols_view = ['Nome_Cliente', 'Status', 'Arquivo', 'Data_Backup_Info', 'Data_Envio', 'Hardware_Hash', 'Atrasado']
     cols_to_show = [c for c in cols_view if c in df_clientes.columns]
     
     def highlight_rows(row):
-        is_late = pd.isna(row.Data_Backup_DT) or row.Data_Backup_DT < limite
-        is_error = str(row.Status).upper() == "ERRO"
-        if is_late or is_error:
+        # Agora usamos a coluna 'Atrasado' que garantimos estar no DataFrame
+        is_error = str(row['Status']).upper() == "ERRO"
+        if row['Atrasado'] or is_error:
             return ['background-color: #ffcccc'] * len(row)
         return [''] * len(row)
 
+    # Exibimos o DataFrame, mas escondemos a coluna técnica 'Atrasado'
     st.dataframe(
         df_clientes[cols_to_show].style.apply(highlight_rows, axis=1),
-        use_container_width=True
+        use_container_width=True,
+        column_config={
+            "Atrasado": None # Isso esconde a coluna da visão do usuário
+        }
     )
     
     if st.button("🔄 Atualizar Painel"):
