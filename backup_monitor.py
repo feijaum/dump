@@ -83,6 +83,7 @@ def main_task():
     
     status = "OK" if latest_file else "ERRO"
     filename = os.path.basename(latest_file) if latest_file else "Nao encontrado"
+    # Formato de data amigável para a planilha
     file_ts = datetime.fromtimestamp(latest_time).strftime('%d/%m/%Y %H:%M:%S') if latest_time else "N/A"
 
     payload = {
