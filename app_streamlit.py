@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="BACKUP DOS CLIENTES", page_icon="📊", layout="wide")
 
 # Estilo customizado para melhorar a visualização
-# CORREÇÃO: Alterado unsafe_allow_index para unsafe_allow_html
 st.markdown("""
     <style>
     .main {
@@ -34,7 +33,7 @@ def load_data():
         df = pd.read_csv(CSV_URL)
         if df.empty: return None
 
-        # Mapeamento dinâmico das colunas (Ordem: Timestamp, Hash, Status, Arquivo, Data Backup, Nome Cliente)
+        # Mapeamento dinâmico das colunas
         new_cols = ['Data_Envio', 'Hardware_Hash', 'Status', 'Arquivo', 'Data_Backup_Info', 'Nome_Cliente']
         current_cols = list(df.columns)
         
@@ -59,9 +58,7 @@ def load_data():
 def verificar_atraso(row, limite):
     """Lógica para determinar se o cliente está com backup em atraso."""
     try:
-        # Tenta converter a data que o cliente enviou (Data_Backup_Info)
         dt_backup = pd.to_datetime(row['Data_Backup_Info'], dayfirst=True, errors='coerce')
-        # Se a data for inválida ou menor que o limite (24h), está atrasado
         if pd.isna(dt_backup) or dt_backup < limite:
             return True
         return False
@@ -80,15 +77,18 @@ if df_clientes is not None:
     df_clientes['Status_Erro'] = df_clientes['Status'].astype(str).str.upper() == "ERRO"
     df_clientes['Critico'] = df_clientes['Atrasado'] | df_clientes['Status_Erro']
 
+    # Clientes críticos para a barra lateral
+    clientes_criticos_nomes = df_clientes[df_clientes['Critico']]['Nome_Cliente'].unique().tolist()
+
     # Métricas de Topo
     total = len(df_clientes)
-    criticos = df_clientes['Critico'].sum()
-    em_dia = total - criticos
+    criticos_count = df_clientes['Critico'].sum()
+    em_dia = total - criticos_count
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Clientes Monitorizados", total)
     c2.metric("Backups em Dia", em_dia)
-    c3.metric("Clientes em Alerta", int(criticos), delta=f"{int(criticos)} críticos", delta_color="inverse")
+    c3.metric("Clientes em Alerta", int(criticos_count), delta=f"{int(criticos_count)} críticos", delta_color="inverse")
 
     st.divider()
 
@@ -102,22 +102,19 @@ if df_clientes is not None:
 
     st.subheader("📋 Estado Atual dos Clientes")
     
-    # Definimos as colunas que queremos mostrar
+    # Colunas para exibição
     cols_to_display = ['Nome_Cliente', 'Status', 'Arquivo', 'Data_Backup_Info', 'Data_Envio', 'Hardware_Hash']
     
-    # Função para colorir a linha inteira baseada na coluna 'Critico'
     def style_dataframe(row):
         if row['Critico']:
             return ['background-color: #ffcccc'] * len(row)
         return [''] * len(row)
 
-    # Exibição Final
-    # CORREÇÃO: Agora garantimos que Critico está no dataframe enviado para o style
     st.dataframe(
         df_clientes[cols_to_display + ['Critico']].style.apply(style_dataframe, axis=1),
         width="stretch",
         column_config={
-            "Critico": None, # Esconde a coluna técnica da visão
+            "Critico": None,
             "Hardware_Hash": st.column_config.TextColumn("ID Hardware", width="small"),
             "Data_Backup_Info": "Data do Ficheiro",
             "Data_Envio": "Último Reporte"
@@ -125,12 +122,16 @@ if df_clientes is not None:
         hide_index=True
     )
     
-    # Botão de refresh manual
+    # --- BARRA LATERAL DINÂMICA ---
+    st.sidebar.header("🚨 Clientes Críticos")
+    if clientes_criticos_nomes:
+        for nome in clientes_criticos_nomes:
+            st.sidebar.error(f"❌ {nome}")
+    else:
+        st.sidebar.success("✅ Nenhum cliente crítico")
+
     if st.button("🔄 Atualizar Painel"):
         st.cache_data.clear()
         st.rerun()
 else:
-    st.info("A aguardar o recebimento de dados. Certifica-te de que os clientes estão a correr o serviço.")
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("**Dica:** Alimenta a coluna 'Nome_Cliente' diretamente na tua Planilha Google para identificar as máquinas aqui.")
+    st.info("A aguardar o recebimento de dados.")
