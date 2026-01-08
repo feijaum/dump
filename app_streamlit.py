@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import os
 from datetime import datetime, timedelta
 
 # Configurações Visuais e Título do Projeto
@@ -7,24 +8,34 @@ st.set_page_config(page_title="BACKUP DOS CLIENTES", page_icon="📊", layout="w
 
 st.title("📊 BACKUP DOS CLIENTES - Dashboard")
 
-# --- DICIONÁRIO DE CLIENTES ---
-# Edite este dicionário para mapear os Hashes aos nomes reais dos clientes
-DICIONARIO_CLIENTES = {
-    "exemplo_hash_12345": "Farmácia do João",
-    "exemplo_hash_67890": "Mercado Central",
-    "HASH_TESTE_A3F58B": "Cliente Teste Matriz"
-}
-
-# --- CONEXÃO COM A PLANILHA ---
+# --- CONEXÃO COM A PLANILHA DO GOOGLE ---
 CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQMAr0iEgRF6pg_wnN9tGFMA9-hKohffXWMhr5IvNjXkxHrs1_u5j22JNuKOII0sQRdGQKT7Fjn-qZS/pub?output=csv"
+
+# --- CARREGAR DICIONÁRIO DO EXCEL ---
+def load_client_dictionary():
+    """Lê o arquivo clientes.xlsx para mapear os nomes."""
+    excel_path = "clientes.xlsx"
+    if os.path.exists(excel_path):
+        try:
+            # Espera-se um Excel com colunas: "Hash" e "Nome"
+            df_dict = pd.read_excel(excel_path)
+            # Converte para dicionário para busca rápida
+            return dict(zip(df_dict['Hash'], df_dict['Nome']))
+        except Exception as e:
+            st.sidebar.error(f"Erro ao ler clientes.xlsx: {e}")
+            return {}
+    else:
+        st.sidebar.warning("Arquivo 'clientes.xlsx' não encontrado na pasta do app.")
+        return {}
 
 @st.cache_data(ttl=300)
 def load_data():
     try:
+        # Carregar dados do Google Sheets
         df = pd.read_csv(CSV_URL)
         if df.empty: return None
 
-        # Mapeamento por posição para evitar erros de nomes de colunas do Google
+        # Mapeamento por posição das colunas do Google Forms
         new_cols = ['Data_Envio', 'Hardware_Hash', 'Status', 'Arquivo', 'Data_Backup_Info']
         current_cols = list(df.columns)
         mapping = {current_cols[i]: new_cols[i] for i in range(len(new_cols)) if i < len(current_cols)}
@@ -34,16 +45,18 @@ def load_data():
         df['Data_Envio'] = pd.to_datetime(df['Data_Envio'], errors='coerce')
         df['Data_Backup_DT'] = pd.to_datetime(df['Data_Backup_Info'], format='%d/%m/%Y %H:%M:%S', errors='coerce')
         
-        # REGISTRO ÚNICO POR CLIENTE: 
-        # Ordenamos pelo envio mais recente e removemos duplicados do Hash
+        # REGISTRO ÚNICO POR CLIENTE (O mais recente)
         df_latest = df.sort_values('Data_Envio', ascending=False).drop_duplicates('Hardware_Hash', keep='first')
         
-        # Aplicar o Dicionário de Nomes
-        df_latest['Nome_Cliente'] = df_latest['Hardware_Hash'].map(DICIONARIO_CLIENTES).fillna("DESCONHECIDO (Novo Cliente)")
+        # Carregar Dicionário Externo (Excel)
+        dict_clientes = load_client_dictionary()
+        
+        # Aplicar o Mapeamento
+        df_latest['Nome_Cliente'] = df_latest['Hardware_Hash'].map(dict_clientes).fillna("DESCONHECIDO (Novo Cliente)")
         
         return df_latest
     except Exception as e:
-        st.error(f"Erro ao carregar dados: {e}")
+        st.error(f"Erro ao carregar dados da nuvem: {e}")
         return None
 
 df_clientes = load_data()
@@ -68,7 +81,7 @@ if df_clientes is not None:
     # Tabela formatada
     st.subheader("📋 Status dos Clientes")
     
-    # Reorganizar colunas para o Nome vir primeiro
+    # Reorganizar colunas para exibição
     cols_view = ['Nome_Cliente', 'Status', 'Arquivo', 'Data_Backup_Info', 'Data_Envio', 'Hardware_Hash']
     
     def highlight_rows(row):
@@ -83,8 +96,16 @@ if df_clientes is not None:
         use_container_width=True
     )
     
+    # Barra lateral com instruções
+    st.sidebar.info("""
+    ### 📂 Dicionário Excel
+    Crie um arquivo chamado **clientes.xlsx** na mesma pasta deste script com:
+    - Coluna A: **Hash** (Código do hardware)
+    - Coluna B: **Nome** (Nome do cliente)
+    """)
+    
     if st.button("🔄 Atualizar Painel"):
         st.cache_data.clear()
         st.rerun()
 else:
-    st.info("Nenhum dado recebido ainda.")
+    st.info("Nenhum dado recebido ainda ou erro de conexão.")
