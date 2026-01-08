@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="BACKUP DOS CLIENTES", page_icon="📊", layout="wide")
 
 # Estilo customizado para melhorar a visualização
+# CORREÇÃO: Alterado unsafe_allow_index para unsafe_allow_html
 st.markdown("""
     <style>
     .main {
@@ -18,7 +19,7 @@ st.markdown("""
         box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
     </style>
-    """, unsafe_allow_index=True)
+    """, unsafe_allow_html=True)
 
 st.title("📊 BACKUP DOS CLIENTES - Dashboard")
 st.markdown("Monitorização centralizada dos logs de backup.")
@@ -34,7 +35,6 @@ def load_data():
         if df.empty: return None
 
         # Mapeamento dinâmico das colunas (Ordem: Timestamp, Hash, Status, Arquivo, Data Backup, Nome Cliente)
-        # Se a planilha tiver mais colunas, o mapeamento ignora o resto
         new_cols = ['Data_Envio', 'Hardware_Hash', 'Status', 'Arquivo', 'Data_Backup_Info', 'Nome_Cliente']
         current_cols = list(df.columns)
         
@@ -59,7 +59,7 @@ def load_data():
 def verificar_atraso(row, limite):
     """Lógica para determinar se o cliente está com backup em atraso."""
     try:
-        # Tenta converter a data que o cliente enviou
+        # Tenta converter a data que o cliente enviou (Data_Backup_Info)
         dt_backup = pd.to_datetime(row['Data_Backup_Info'], dayfirst=True, errors='coerce')
         # Se a data for inválida ou menor que o limite (24h), está atrasado
         if pd.isna(dt_backup) or dt_backup < limite:
@@ -105,20 +105,19 @@ if df_clientes is not None:
     # Definimos as colunas que queremos mostrar
     cols_to_display = ['Nome_Cliente', 'Status', 'Arquivo', 'Data_Backup_Info', 'Data_Envio', 'Hardware_Hash']
     
-    # Função para colorir a linha inteira
+    # Função para colorir a linha inteira baseada na coluna 'Critico'
     def style_dataframe(row):
-        # Se for crítico, aplica fundo vermelho claro
         if row['Critico']:
             return ['background-color: #ffcccc'] * len(row)
         return [''] * len(row)
 
     # Exibição Final
-    # Passamos as colunas extras ('Critico') para o style mas escondemos no st.dataframe
+    # CORREÇÃO: Agora garantimos que Critico está no dataframe enviado para o style
     st.dataframe(
         df_clientes[cols_to_display + ['Critico']].style.apply(style_dataframe, axis=1),
-        use_container_width=True,
+        width="stretch",
         column_config={
-            "Critico": None, # Esconde a coluna técnica
+            "Critico": None, # Esconde a coluna técnica da visão
             "Hardware_Hash": st.column_config.TextColumn("ID Hardware", width="small"),
             "Data_Backup_Info": "Data do Ficheiro",
             "Data_Envio": "Último Reporte"
